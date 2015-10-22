@@ -1,7 +1,8 @@
 #!/usr/bin/env python2
 
-import sys, os, os.path
-from datetime import datetime, date
+import sys
+import os, os.path
+from datetime import datetime
 from glob import glob
 import struct
 import mmap
@@ -14,6 +15,9 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 
 
+Byte = struct.Struct('< B')
+
+
 def anabat_date(fname):
     """Extract timestamp as datetime from Anabat format file"""
     # See: http://users.lmi.net/corben/fileform.htm#ANABAT_SEQUENCE_FILE_TYPE_132
@@ -21,6 +25,83 @@ def anabat_date(fname):
         with contextlib.closing(mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)) as bytes:
             vals = struct.unpack_from('HBBBBB', bytes, 0x120)
             return datetime(*vals)
+
+
+def anabat_duration(fname):
+    """Extract the duration in seconds from an Anabat file"""
+    with open(fname, 'rb') as f, contextlib.closing(mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)) as m:
+        size = len(m)
+
+        # parse header
+        data_info_pointer, file_type = struct.unpack_from('< H x B', m)
+        data_pointer, res1, divratio, vres = struct.unpack_from('< H H B B', m, data_info_pointer)
+        #print 'file_type: %d\tdata_info_pointer: 0x%3x\tdata_pointer: 0x%3x' % (file_type, data_info_pointer, data_pointer)
+
+        # parse actual sequence data
+        i = data_pointer   # byte index as we scan through the file (data starts at 0x150 for v132, 0x120 for older files)
+        intervals_us = np.empty(2**14, np.dtype('u4'))
+        int_i = 0
+
+        while i < size:
+            byte = Byte.unpack_from(m, i)[0]
+
+            if byte <= 0x7F:
+                # Single byte is a 7-bit signed two's complement offset from previous interval
+                offset = byte if byte < 2**6 else byte - 2**7  # clever two's complement unroll
+                if int_i > 0:
+                    intervals_us[int_i] = intervals_us[int_i-1] + offset
+                    int_i += 1
+                else:
+                    print >> sys.stderr, 'Sequence file starts with a one-byte interval diff! Skipping byte %x' % byte
+                    #intervals.append(offset)  # ?!
+
+            elif 0x80 <= byte <= 0x9F:
+                # time interval is contained in 13 bits, upper 5 from the remainder of this byte, lower 8 bits from the next byte
+                accumulator = (byte & 0b00011111) << 8
+                i += 1
+                accumulator |= Byte.unpack_from(m, i)[0]
+                intervals_us[int_i] = accumulator
+                int_i += 1
+
+            elif 0xA0 <= byte <= 0xBF:
+                # interval is contained in 21 bits, upper 5 from the remainder of this byte, next 8 from the next byte and the lower 8 from the byte after that
+                accumulator = (byte & 0b00011111) << 16
+                i += 1
+                accumulator |= Byte.unpack_from(m, i)[0] << 8
+                i += 1
+                accumulator |= Byte.unpack_from(m, i)[0]
+                intervals_us[int_i] = accumulator
+                int_i += 1
+
+            elif 0xC0 <= byte <= 0xDF:
+                # interval is contained in 29 bits, the upper 5 from the remainder of this byte, the next 8 from the following byte etc.
+                accumulator = (byte & 0b00011111) << 24
+                i += 1
+                accumulator |= Byte.unpack_from(m, i)[0] << 16
+                i += 1
+                accumulator |= Byte.unpack_from(m, i)[0] << 8
+                i += 1
+                accumulator |= Byte.unpack_from(m, i)[0]
+                intervals_us[int_i] = accumulator
+                int_i += 1
+
+            elif 0xE0 <= byte <= 0xFF:
+                # status byte which applies to the next n dots
+                status = byte & 0b00011111
+                i += 1
+                dotcount = Byte.unpack_from(m, i)[0]
+                print >> sys.stderr, 'UNSUPPORTED: Status %X for %d dots' % (status, dotcount)
+                # TODO: not yet supported
+
+            else:
+                raise Exception('Unknown byte %X at offset 0x%X' % (byte, i))
+
+            i += 1
+
+    intervals_us = intervals_us[:int_i]
+    duration_s = np.sum(intervals_us) * 1e-6
+    print >> sys.stderr, '%s (%.1f sec)' % (fname, duration_s)
+    return duration_s
 
 
 def read_humitemp(fname):
@@ -58,6 +139,7 @@ def main(dirname):
     dates = []
     timestamps = []
     counts = []
+    durations = []
     
     ## Read all the Anabat files beneath our starting directory
     for subdir in os.listdir(dirname):
@@ -67,29 +149,36 @@ def main(dirname):
         night = datetime.strptime(subdir, '%Y%m%d').date()
         dates.append(night)
         
-        dircount= 0
+        dircount = 0
+        total_duration = 0.0
         for filepath in glob(os.path.join(dirpath, '*.*#')):
             dircount += 1
             timestamp = anabat_date(filepath)
             timestamps.append(timestamp)
+            total_duration += anabat_duration(filepath)
         counts.append(dircount)
-        print '%s  %4d  %s' % (subdir, dircount, '#' * int(round(dircount/100.0)))
+        durations.append(total_duration)
+        print '%s  %4d  %4.1fs  %s' % (subdir, dircount, total_duration, '#' * int(round(dircount/100.0)))
+
+    durations = [dur/60.0 for dur in durations]  # convert to minutes
 
     ## Read the HumiTemp.txt file
     fname = os.path.join(dirname, 'HumiTemp.txt')
     dates2, temps_min, temps_max, temps_avg = zip(*read_humitemp_summary(fname))
-    print len(dates), dates
-    print len(dates2), dates2
 
-    ## Plot   
-    fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, sharex=True)
+    ## Plot
+    #fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, sharex=True, gridspec_kw={'height_ratios': [3,1]})
+    fig = plt.figure()
     fig.autofmt_xdate()
+    ax1 = plt.subplot2grid((3,1), (0,0), rowspan=2)
+    ax2 = plt.subplot2grid((3,1), (2,0), rowspan=1, sharex=ax1)
 
     # Activity bar plot
-    ax1.bar(dates, counts, 0.85, log=False)
+    ax1.bar(dates, durations, 0.85, log=False)
     ax1.spines['bottom'].set_position(('outward', 10))
     ax1.set_xlim(dates[0], dates[-1])
     ax1.xaxis.set_minor_locator(MultipleLocator(1))
+    ax1.set_ylabel('Activity Duration (minutes)')
     ax1.set_xlabel('Date')
 
     # Temperature line plot
@@ -97,14 +186,13 @@ def main(dirname):
     ax2.plot(dates2, temps_avg, color='green')
     ax2.plot(dates2, temps_min, color='blue', lw=1.5)
     ax2.plot(dates2, temps_max, color='red', lw=1.5)
-    ax2.set_ylabel('Temp $^\circ$C')
+    ax2.set_ylabel('Temp ($^\circ$C)')
     ax2.xaxis.set_minor_locator(MultipleLocator(1))
     ax2.set_xlabel('Date')
     
     plt.tight_layout()
     plt.show()
 
-    
 
 if __name__ == '__main__':
     if os.name == 'nt' and 'PROMPT' not in os.environ and len(sys.argv) < 2:
