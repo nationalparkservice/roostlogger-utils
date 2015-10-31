@@ -121,6 +121,11 @@ def mean(values):
     return sum(values) / float(len(values))
 
 
+def c2f(temp_c):
+    """Convert temperature in Degrees Celsius to Degrees Fahrenheit"""
+    return temp_c * 1.8 + 32
+
+
 def read_humitemp_summary(fname):
     """Produce sequence of (date, min, max, avg) from `HumiTemp.txt` file"""
     # TODO: should these cover a "night" instead?
@@ -135,30 +140,61 @@ def read_humitemp_summary(fname):
         yield date, min_, max_, avg
 
 
-def main(dirname):
+def cache_exists():
+    return os.path.exists(os.path.join(dirname, '.activity_temp_report.dates.txt'))
+
+def write_cache(dates, timestamps, counts, durations):
+    with open(os.path.join(dirname, '.activity_temp_report.dates.txt'), 'w') as cachefile:
+        cachefile.writelines(date_.strftime('%Y-%m-%d\n') for date_ in dates)
+    with open(os.path.join(dirname, '.activity_temp_report.timestamps.txt'), 'w') as cachefile:
+        cachefile.writelines(timestamp.strftime('%Y-%m-%dT%H:%M:%S\n') for timestamp in timestamps)
+    with open(os.path.join(dirname, '.activity_temp_report.counts'), 'w') as cachefile:
+        cachefile.writelines(('%d\n' % count) for count in counts)
+    with open(os.path.join(dirname, '.activity_temp_report.durations'), 'w') as cachefile:
+        cachefile.writelines(('%f\n' % dur) for dur in durations)
+
+def read_cache():
+    dates, timestamps, counts, durations = None, None, None, None
+    with open(os.path.join(dirname, '.activity_temp_report.dates.txt'), 'r') as cachefile:
+        dates = [datetime.strptime(date_, '%Y-%m-%d\n').date() for date_ in cachefile]
+    with open(os.path.join(dirname, '.activity_temp_report.timestamps.txt'), 'r') as cachefile:
+        timestamps = [datetime.strptime(timestamp, '%Y-%m-%dT%H:%M:%S\n') for timestamp in cachefile]
+    with open(os.path.join(dirname, '.activity_temp_report.counts'), 'r') as cachefile:
+        counts = [int(count) for count in cachefile]
+    with open(os.path.join(dirname, '.activity_temp_report.durations'), 'r') as cachefile:
+        durations = [float(dur) for dur in cachefile]
+    return dates, timestamps, counts, durations
+
+
+def main(dirname, logscale=False):
     dates = []
     timestamps = []
     counts = []
     durations = []
-    
-    ## Read all the Anabat files beneath our starting directory
-    for subdir in os.listdir(dirname):
-        dirpath = os.path.join(dirname, subdir)
-        if not os.path.isdir(dirpath) or not subdir.startswith('20'):
-            continue
-        night = datetime.strptime(subdir, '%Y%m%d').date()
-        dates.append(night)
-        
-        dircount = 0
-        total_duration = 0.0
-        for filepath in glob(os.path.join(dirpath, '*.*#')):
-            dircount += 1
-            timestamp = anabat_date(filepath)
-            timestamps.append(timestamp)
-            total_duration += anabat_duration(filepath)
-        counts.append(dircount)
-        durations.append(total_duration)
-        print '%s  %4d  %4.1fs  %s' % (subdir, dircount, total_duration, '#' * int(round(dircount/100.0)))
+
+    if not cache_exists():
+        ## Read all the Anabat files beneath our starting directory
+        for subdir in os.listdir(dirname):
+            dirpath = os.path.join(dirname, subdir)
+            if not os.path.isdir(dirpath) or not subdir.startswith('20'):
+                continue
+            night = datetime.strptime(subdir, '%Y%m%d').date()
+            dates.append(night)
+
+            dircount = 0
+            total_duration = 0.0
+            for filepath in glob(os.path.join(dirpath, '*.*#')):
+                dircount += 1
+                timestamp = anabat_date(filepath)
+                timestamps.append(timestamp)
+                total_duration += anabat_duration(filepath)
+            counts.append(dircount)
+            durations.append(total_duration)
+            print '%s  %4d  %4.1fs  %s' % (subdir, dircount, total_duration, '#' * int(round(dircount/100.0)))
+
+        write_cache(dates, timestamps, counts, durations)
+    else:
+        dates, timestamps, counts, durations = read_cache()
 
     durations = [dur/60.0 for dur in durations]  # convert to minutes
 
@@ -174,14 +210,27 @@ def main(dirname):
     ax2 = plt.subplot2grid((3,1), (2,0), rowspan=1, sharex=ax1)
 
     # Activity bar plot
-    ax1.bar(dates, durations, 0.85, log=False)
+    ax1.bar(dates, durations, 0.85, log=logscale)
     ax1.spines['bottom'].set_position(('outward', 10))
     ax1.set_xlim(dates[0], dates[-1])
     ax1.xaxis.set_minor_locator(MultipleLocator(1))
+    ax1.tick_params(labelright=True)
+    ax1.yaxis.grid(True)
     ax1.set_ylabel('Activity Duration (minutes)')
     ax1.set_xlabel('Date')
 
     # Temperature line plot
+    ax3 = ax2.twinx()  # Fahrenheit scale
+
+    def update_ax3(ax2):
+        y1, y2 = ax2.get_ylim()
+        ax3.set_ylim(c2f(y1), c2f(y2))
+        ax3.figure.canvas.draw()
+
+    ax2.callbacks.connect('ylim_changed', update_ax3)
+
+    ax2.yaxis.grid(True)
+
     ax2.fill_between(dates2, temps_min, temps_max, facecolor='#D0D0D0')
     ax2.plot(dates2, temps_avg, color='green')
     ax2.plot(dates2, temps_min, color='blue', lw=1.5)
