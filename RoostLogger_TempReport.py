@@ -47,6 +47,13 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 
 
+# Display colormap, see:  http://matplotlib.org/examples/color/colormaps_reference.html
+COLORMAP = 'afmhot'  # afmhot, gist_heat, hot, copper, cool, bone, gray
+
+# Tweak this value higher for longer (timewise) deployments
+ASPECT_RATIO = 2.5
+
+
 def anabat_date(fname):
     """Extract timestamp as datetime from Anabat format file"""
     # See: http://users.lmi.net/corben/fileform.htm#ANABAT_SEQUENCE_FILE_TYPE_132
@@ -66,10 +73,17 @@ def read_humitemp(fname):
             temp = float(temp)
             yield timestamp, temp
 
+
 def mean(values):
+    """Calculate the mean (average) value of a list"""
     if not values:
         return None
     return sum(values) / float(len(values))
+
+
+def c2f(temp_c):
+    """Convert temperature in Degrees Celsius to Degrees Fahrenheit"""
+    return temp_c * 1.8 + 32
 
 def read_humitemp_summary(fname):
     """Produce sequence of (date, min, max, avg) from `HumiTemp.txt` file"""
@@ -109,7 +123,7 @@ def main(fname):
 
     ## Plot the histogram
     fig, (ax1, ax2) = plt.subplots(nrows=2, sharex=True)
-    ax1.imshow(histogram, cmap=plt.cm.gist_heat, interpolation='none', aspect=1.0/12)
+    ax1.imshow(histogram, cmap=plt.get_cmap(COLORMAP), interpolation='none', aspect=1.0/12*ASPECT_RATIO)
     ax1.set_title('RoostLogger: ' + os.path.basename(os.path.dirname(os.path.abspath(fname))).replace('_', ' '))
 
     ax1.spines['left'].set_position(('outward', 10))
@@ -122,18 +136,30 @@ def main(fname):
     ax1.set_xlim(0, len(dates)-1)
     ax1.set_xticklabels([dates[int(i)] for i in ax1.get_xticks().tolist() if i < len(dates)])
     ax1.xaxis.set_minor_locator(MultipleLocator(1))
+    ax1.tick_params(labelright=True)
     fig.autofmt_xdate()
     #ax1.set_xlabel('Date')
 
     ## Plot the daily summary
+    ax3 = ax2.twinx()  # Fahrenheit scale
+
+    def update_ax3(ax2):
+        y1, y2 = ax2.get_ylim()
+        ax3.set_ylim(c2f(y1), c2f(y2))
+        ax3.figure.canvas.draw()
+
+    ax2.callbacks.connect('ylim_changed', update_ax3)
+
+    ax2.yaxis.grid(True)
+
     dates, mins, maxs, avgs = zip(*read_humitemp_summary(fname))
-    #ax2 = plt.subplot(212, sharex=ax1)
     ax2.fill_between(range(len(dates)), mins, maxs, facecolor='#D0D0D0')
     ax2.plot(avgs, color='green')
     ax2.plot(mins, color='blue', lw=1.5)
     ax2.plot(maxs, color='red', lw=1.5)
     ax2.set_ylabel('Temp $^\circ$C')
     ax2.set_xlabel('Date')
+    ax3.set_ylabel('Temp $^\circ$F')
 
     plt.show()
     
