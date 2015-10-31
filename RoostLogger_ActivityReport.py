@@ -47,9 +47,19 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 
 
-ASPECT_RATIO = 1.0
-BINSIZE_MINS = 20
+# Display colormap, see:  http://matplotlib.org/examples/color/colormaps_reference.html
+COLORMAP = 'cubehelix'  # afmhot, gist_heat, hot, copper, cool, bone, gray
+
+# Tweak this value higher for longer (timewise) deployments
+ASPECT_RATIO = 6.0
+
+# Specify the size of a time "pixel" in minutes
+BINSIZE_MINS = 10
+
 BINS_PER_HOUR = 60 / BINSIZE_MINS
+
+CACHE_FILE_TIMES = '.activity_report.timestamps.txt'
+CACHE_FILE_DATES = '.activity_report.dates.txt'
 
 
 def anabat_date(fname):
@@ -61,7 +71,7 @@ def anabat_date(fname):
             return datetime(*vals)
     
 
-def main(dirname):
+def main(dirname, logscale=True):
     """
     Plot relative RoostLogger activity with respect to time and date.
     """
@@ -69,19 +79,34 @@ def main(dirname):
     timestamps = []
 
     ## Read all the Anabat files beneath our starting directory
-    for subdir in os.listdir(dirname):
-        dirpath = os.path.join(dirname, subdir)
-        if not os.path.isdir(dirpath) or not subdir.startswith('20'):
-            continue
-        night = datetime.strptime(subdir, '%Y%m%d').date()
-        dates.append(night)
-        
-        dircount= 0
-        for filepath in glob(os.path.join(dirpath, '*.*#')):
-            dircount += 1
-            timestamp = anabat_date(filepath)
-            timestamps.append(timestamp)
-        print '%s  %4d  %s' % (subdir, dircount, '#' * int(round(dircount/100.0)))
+    if not os.path.isfile(os.path.join(dirname, CACHE_FILE_TIMES)):
+        for subdir in os.listdir(dirname):
+            dirpath = os.path.join(dirname, subdir)
+            if not os.path.isdir(dirpath) or not subdir.startswith('20'):
+                continue
+            night = datetime.strptime(subdir, '%Y%m%d').date()
+            dates.append(night)
+
+            dircount= 0
+            for filepath in glob(os.path.join(dirpath, '*.*#')):
+                dircount += 1
+                timestamp = anabat_date(filepath)
+                timestamps.append(timestamp)
+            print '%s  %4d  %s' % (subdir, dircount, '#' * int(round(dircount/100.0)))
+
+        ## Write cache files
+        with open(os.path.join(dirname, CACHE_FILE_TIMES), 'w') as cachefile:
+            cachefile.writelines(timestamp.strftime('%Y-%m-%dT%H:%M:%S\n') for timestamp in timestamps)
+        with open(os.path.join(dirname, CACHE_FILE_DATES), 'w') as cachefile:
+            cachefile.writelines(date_.strftime('%Y-%m-%d\n') for date_ in dates)
+
+    else:
+        # Lets read from cached version rather than filesystem
+        # TODO: we should only use cache file if no Anabat files have more recent modification timestamps
+        with open(os.path.join(dirname, CACHE_FILE_TIMES), 'r') as cachefile:
+            timestamps = [datetime.strptime(line, '%Y-%m-%dT%H:%M:%S\n') for line in cachefile]
+        with open(os.path.join(dirname, CACHE_FILE_DATES), 'r') as cachefile:
+            dates = [datetime.strptime(line, '%Y-%m-%d\n').date() for line in cachefile]
 
     ## Create a 2D time histogram
     histogram = np.zeros((24*BINS_PER_HOUR, len(dates)))
@@ -94,11 +119,13 @@ def main(dirname):
             print >> sys.stderr, e
             continue
         histogram[y,x] += 1
-    histogram = np.log1p(histogram)  # TODO: use log optionally to buffer spikes
+
+    if logscale:
+        histogram = np.log1p(histogram)
 
     ## Plot it
     fig, ax = plt.subplots()
-    ax.imshow(histogram, cmap=plt.cm.gist_heat, interpolation='none', aspect=1.0/BINS_PER_HOUR*ASPECT_RATIO)
+    ax.imshow(histogram, cmap=plt.get_cmap(COLORMAP), interpolation='none', aspect=1.0/BINS_PER_HOUR*ASPECT_RATIO)
     ax.set_title('RoostLogger: ' + os.path.basename(os.path.normpath(dirname)).replace('_', ' '))
 
     ax.spines['left'].set_position(('outward', 10))
