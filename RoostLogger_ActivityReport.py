@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 """
-RoostLogger_Report.py - Plot relative bat activity with respect to
-    time and date given recordings made with a Titley Scientific
+RoostLogger_ActivityHeatmap.py - Plot relative bat activity with respect
+    to time and date given recordings made with a Titley Scientific
     Anabat RoostLogger.
 
 This script requires Python 2, NumPy, and MatPlotLib; all of which
@@ -21,7 +21,7 @@ Physical Science Technician, Lava Beds National Monument
 HISTORY
 =======
 
-2015-XX-XX:  Initial public release.
+2015-10-21:  Initial public release.
 
 
 LICENSE
@@ -35,7 +35,7 @@ worldwide through the CC0 1.0 Universal public domain dedication.
 """
 
 import sys, os, os.path
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from glob import glob
 import struct
 import mmap
@@ -54,12 +54,13 @@ COLORMAP = 'cubehelix'  # afmhot, gist_heat, hot, copper, cool, bone, gray
 ASPECT_RATIO = 6.0
 
 # Specify the size of a time "pixel" in minutes
-BINSIZE_MINS = 10
+BINSIZE_MINUTES = 15
 
-BINS_PER_HOUR = 60 / BINSIZE_MINS
 
-CACHE_FILE_TIMES = '.activity_report.timestamps.txt'
-CACHE_FILE_DATES = '.activity_report.dates.txt'
+_BINS_PER_HOUR = 60 / BINSIZE_MINUTES
+
+_CACHE_FILE_TIMES = '.activity_report.timestamps.txt'
+_CACHE_FILE_DATES = '.activity_report.dates.txt'
 
 
 def anabat_date(fname):
@@ -71,15 +72,16 @@ def anabat_date(fname):
             return datetime(*vals)
     
 
-def main(dirname, logscale=True):
+def load_files(dirname, use_cache=False):
     """
-    Plot relative RoostLogger activity with respect to time and date.
+    Read all the Anabat files beneath our starting directory
     """
     dates = []
     timestamps = []
 
-    ## Read all the Anabat files beneath our starting directory
-    if not os.path.isfile(os.path.join(dirname, CACHE_FILE_TIMES)):
+    if not use_cache or not os.path.isfile(os.path.join(dirname, _CACHE_FILE_TIMES)):
+        
+        ## Read all the Anabat files beneath our starting directory
         for subdir in os.listdir(dirname):
             dirpath = os.path.join(dirname, subdir)
             if not os.path.isdir(dirpath) or not subdir.startswith('20'):
@@ -93,44 +95,70 @@ def main(dirname, logscale=True):
                 timestamp = anabat_date(filepath)
                 timestamps.append(timestamp)
             print '%s  %4d  %s' % (subdir, dircount, '#' * int(round(dircount/100.0)))
+        
+        if not dates and not timestamps:
+            print 'Loading Anabat files from flat directory...',
+            night_offset = timedelta(hours=-12)
+            for i, filepath in enumerate(glob(os.path.join(dirname, '*.*#'))):
+                timestamp = anabat_date(filepath)
+                night = (timestamp + night_offset).date()
+                dates.append(night)  # one per file; we'll remove dupes later
+                timestamps.append(timestamp)
+                if not i % 100:
+                    print '.',
+            dates = sorted(set(dates))
+            print
 
         ## Write cache files
-        with open(os.path.join(dirname, CACHE_FILE_TIMES), 'w') as cachefile:
+        with open(os.path.join(dirname, _CACHE_FILE_TIMES), 'w') as cachefile:
             cachefile.writelines(timestamp.strftime('%Y-%m-%dT%H:%M:%S\n') for timestamp in timestamps)
-        with open(os.path.join(dirname, CACHE_FILE_DATES), 'w') as cachefile:
+        with open(os.path.join(dirname, _CACHE_FILE_DATES), 'w') as cachefile:
             cachefile.writelines(date_.strftime('%Y-%m-%d\n') for date_ in dates)
 
     else:
         # Lets read from cached version rather than filesystem
         # TODO: we should only use cache file if no Anabat files have more recent modification timestamps
-        with open(os.path.join(dirname, CACHE_FILE_TIMES), 'r') as cachefile:
+        print 'Using cache files', _CACHE_FILE_TIMES, _CACHE_FILE_DATES        
+        with open(os.path.join(dirname, _CACHE_FILE_TIMES), 'r') as cachefile:
             timestamps = [datetime.strptime(line, '%Y-%m-%dT%H:%M:%S\n') for line in cachefile]
-        with open(os.path.join(dirname, CACHE_FILE_DATES), 'r') as cachefile:
+        with open(os.path.join(dirname, _CACHE_FILE_DATES), 'r') as cachefile:
             dates = [datetime.strptime(line, '%Y-%m-%d\n').date() for line in cachefile]
 
-    ## Create a 2D time histogram
-    histogram = np.zeros((24*BINS_PER_HOUR, len(dates)))
+    return dates, timestamps
+
+
+def build_time_heatmap(dates, timestamps, logscale=True):
+    """
+    Create a 2D date/time/activity heatmap.
+    """
+    heatmap = np.zeros((24*_BINS_PER_HOUR, len(dates)))
     for timestamp in timestamps:
-        y = timestamp.hour * BINS_PER_HOUR + (timestamp.minute // BINSIZE_MINS)
+        y = timestamp.hour * _BINS_PER_HOUR + (timestamp.minute // BINSIZE_MINUTES)
         try:
             x = dates.index(timestamp.date())
         except ValueError as e:
             # FIXME: either build values from anabat file timestamps themselves, or hash by NIGHT (preferably do both)
             print >> sys.stderr, e
             continue
-        histogram[y,x] += 1
+        heatmap[y,x] += 1
 
     if logscale:
-        histogram = np.log1p(histogram)
+        heatmap = np.log1p(heatmap)
 
-    ## Plot it
+    return heatmap
+
+
+def plot(dates, heatmap):
+    """
+    Plot it
+    """
     fig, ax = plt.subplots()
-    ax.imshow(histogram, cmap=plt.get_cmap(COLORMAP), interpolation='none', aspect=1.0/BINS_PER_HOUR*ASPECT_RATIO)
+    ax.imshow(heatmap, cmap=plt.get_cmap(COLORMAP), interpolation='none', aspect=1.0/_BINS_PER_HOUR*ASPECT_RATIO)
     ax.set_title('RoostLogger: ' + os.path.basename(os.path.normpath(dirname)).replace('_', ' '))
 
     ax.spines['left'].set_position(('outward', 10))
-    ax.yaxis.set_minor_locator(MultipleLocator(BINS_PER_HOUR))
-    ax.set_yticks([h*BINS_PER_HOUR for h in [0, 6, 12, 18, 23]])
+    ax.yaxis.set_minor_locator(MultipleLocator(_BINS_PER_HOUR))
+    ax.set_yticks([h*_BINS_PER_HOUR for h in [0, 6, 12, 18, 23]])
     ax.set_yticklabels(['00:00', '06:00', '12:00', '18:00', '23:00'])
     ax.set_ylabel('Time')
 
@@ -142,7 +170,16 @@ def main(dirname, logscale=True):
     ax.set_xlabel('Date')
 
     plt.show()    
-        
+
+
+def main(dirname, logscale=True):
+    """
+    Plot relative RoostLogger activity with respect to time and date.
+    """
+    dates, timestamps = load_files(dirname)
+    heatmap = build_time_heatmap(dates, timestamps, logscale=logscale)
+    plot(dates, heatmap)
+
 
 if __name__ == '__main__':
     if os.name == 'nt' and 'PROMPT' not in os.environ:
