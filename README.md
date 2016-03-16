@@ -13,7 +13,7 @@ a Titley Scientific RoostLogger
 
 ## Examples
 
-#RoostLogger_ActivityHeatmap.py
+### RoostLogger_ActivityHeatmap.py
 
 ![example heatmap](doc/heatmap_example.png "Example bat activity heatmap produced by `RoostLogger_ActivityHeatmap.py`")
 
