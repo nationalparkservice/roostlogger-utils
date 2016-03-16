@@ -11,6 +11,13 @@ a Titley Scientific RoostLogger
 - MatPlotLib 1.1+
 
 
+## Examples
+
+#RoostLogger_ActivityHeatmap.py
+
+![example heatmap](doc/heatmap_example.png "Example bat activity heatmap produced by `RoostLogger_ActivityHeatmap.py`")
+
+
 ## Public Domain
 
 As a work of the United States Government, this software is in the
