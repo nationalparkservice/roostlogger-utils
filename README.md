@@ -17,6 +17,10 @@ a Titley Scientific RoostLogger
 
 ![example heatmap](doc/heatmap_example.png "Example bat activity heatmap produced by `RoostLogger_ActivityHeatmap.py`")
 
+### RoostLogger_ActivityTempReport2.py
+
+![example activity and temperature report](doc/activity_temp_example.png "Example activity and temperature report produced by `RoostLogger_ActivityTempReport2.py`")
+
 
 ## Public Domain
 
