@@ -7,6 +7,7 @@ from glob import glob
 import struct
 import mmap
 import contextlib
+import itertools
 from collections import defaultdict
 
 import numpy as np
@@ -154,6 +155,7 @@ def write_cache(dates, timestamps, counts, durations):
         cachefile.writelines(('%f\n' % dur) for dur in durations)
 
 def read_cache():
+    print 'Reading from cache files `.activity_temp_report.*` ...'
     dates, timestamps, counts, durations = None, None, None, None
     with open(os.path.join(dirname, '.activity_temp_report.dates.txt'), 'r') as cachefile:
         dates = [datetime.strptime(date_, '%Y-%m-%d\n').date() for date_ in cachefile]
@@ -166,13 +168,14 @@ def read_cache():
     return dates, timestamps, counts, durations
 
 
-def main(dirname, logscale=False):
+def main(dirname, logscale=False, ignore_cache=False):
     dates = []
     timestamps = []
     counts = []
     durations = []
+    title = os.path.basename(dirname).replace('_', ' ')
 
-    if not cache_exists():
+    if not cache_exists() or ignore_cache:
         ## Read all the Anabat files beneath our starting directory
         for subdir in os.listdir(dirname):
             dirpath = os.path.join(dirname, subdir)
@@ -183,7 +186,8 @@ def main(dirname, logscale=False):
 
             dircount = 0
             total_duration = 0.0
-            for filepath in glob(os.path.join(dirpath, '*.*#')):
+            anabat_files = itertools.chain(glob(os.path.join(dirpath, '*.*#')), glob(os.path.join(dirpath, '*.zc')))
+            for filepath in anabat_files:
                 dircount += 1
                 timestamp = anabat_date(filepath)
                 timestamps.append(timestamp)
@@ -205,6 +209,7 @@ def main(dirname, logscale=False):
     ## Plot
     #fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, sharex=True, gridspec_kw={'height_ratios': [3,1]})
     fig = plt.figure()
+    fig.suptitle(title, fontsize=16)
     fig.autofmt_xdate()
     ax1 = plt.subplot2grid((3,1), (0,0), rowspan=2)
     ax2 = plt.subplot2grid((3,1), (2,0), rowspan=1, sharex=ax1)
@@ -240,6 +245,10 @@ def main(dirname, logscale=False):
     ax2.set_xlabel('Date')
     
     plt.tight_layout()
+    plt.subplots_adjust(top=0.925)  # hack because tight_layout() doesn't recognize suptitle()
+    
+    plt.savefig('%s.png'%title)
+
     plt.show()
 
 

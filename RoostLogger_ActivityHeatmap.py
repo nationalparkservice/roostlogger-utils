@@ -40,6 +40,7 @@ from glob import glob
 import struct
 import mmap
 import contextlib
+import itertools
 
 import numpy as np
 
@@ -90,7 +91,8 @@ def load_files(dirname, use_cache=False):
             dates.append(night)
 
             dircount= 0
-            for filepath in glob(os.path.join(dirpath, '*.*#')):
+            anabat_files = itertools.chain(glob(os.path.join(dirpath, '*.*#')), glob(os.path.join(dirpath, '*.zc')))
+            for filepath in anabat_files:
                 dircount += 1
                 timestamp = anabat_date(filepath)
                 timestamps.append(timestamp)
